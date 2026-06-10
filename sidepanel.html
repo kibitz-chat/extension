@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Kibitz</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font: 13px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        background: #0b241c;
+        color: #e7f3ec;
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 12px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        flex: 0 0 auto;
+      }
+      .brand { font-weight: 800; color: #8fd3b0; }
+      .room {
+        font: 0.85em ui-monospace, Menlo, monospace;
+        background: rgba(255, 255, 255, 0.08);
+        padding: 2px 7px;
+        border-radius: 6px;
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      button {
+        background: #18794e;
+        color: #fff;
+        border: 0;
+        border-radius: 8px;
+        padding: 7px 10px;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button.ghost { background: rgba(255, 255, 255, 0.1); }
+      button.on { background: #2a9d6a; }
+      button.live { background: #c2410c; }
+      button.danger { background: #b3261e; }
+      button:disabled { opacity: 0.45; cursor: default; }
+      button svg { display: block; }
+      #copy, #upgrade { font-size: 0.85em; padding: 5px 8px; }
+      #upgrade { flex: 0 0 auto; }
+
+      /* Premium license panel — toggled by the ⚡ header button. */
+      .license { padding: 10px 12px; flex: 0 0 auto; background: rgba(255, 255, 255, 0.03);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
+      .license[hidden] { display: none; }
+      .lic-info { margin: 0 0 8px; font-size: 0.82em; color: #9fc4b3; }
+      .lic-info a { color: #8fd3b0; font-weight: 700; text-decoration: underline; }
+      .lic-row { display: flex; gap: 6px; }
+      .lic-row input { flex: 1; min-width: 0; background: rgba(0, 0, 0, 0.3);
+        border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 8px;
+        color: #e7f3ec; padding: 7px 9px; font: inherit; }
+      .lic-status { margin: 6px 0 0; font-size: 0.78em; color: #8fd3b0; min-height: 1em; }
+
+      /* QR to join from a phone — generated locally (no third-party image service). */
+      .qrpanel { flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: 8px;
+        padding: 12px; background: rgba(255, 255, 255, 0.03);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
+      .qrpanel[hidden] { display: none; }
+      .qr { width: 180px; height: 180px; padding: 10px; background: #fff; border-radius: 10px; }
+      .qr svg { display: block; width: 100%; height: 100%; }
+      .qr-url { margin: 0; font: 0.78em ui-monospace, Menlo, monospace; color: #8fd3b0;
+        word-break: break-all; text-align: center; }
+      .qr-hint { margin: 0; font-size: 0.78em; color: #7fa593; text-align: center; }
+
+      /* The active share. When someone ELSE presents it's the dominant element
+         (fills the panel — drag the panel wider for a bigger view). When YOU
+         present, it collapses to a thin banner (you watch your real tab). */
+      .stage { flex: 0 0 auto; position: relative; background: #000; display: none;
+        align-items: center; justify-content: center; }
+      body.has-stage .stage, body.presenting-self .stage { display: flex; }
+      body.has-stage .stage { flex: 1 1 auto; min-height: 0; }
+      .stage video { display: block; width: 100%; max-height: 34vh; object-fit: contain; background: #000; }
+      body.has-stage .stage video { height: 100%; max-height: none; }
+      body.presenting-self .stage video { display: none; }
+      .stage:fullscreen { background: #000; }
+      .stage:fullscreen video { width: 100%; height: 100%; max-height: none; object-fit: contain; }
+      .stage .who {
+        position: absolute; left: 8px; bottom: 8px;
+        display: inline-flex; align-items: center; gap: 5px;
+        font-size: 0.78em; background: rgba(0, 0, 0, 0.6); color: #cfe6da;
+        padding: 2px 8px; border-radius: 7px;
+      }
+      .stage .selfnote {
+        display: inline-flex; align-items: center; gap: 7px;
+        padding: 9px 12px; color: #8fd3b0; font-weight: 600; background: #06170f; width: 100%;
+      }
+      /* The class `display` above out-specifies the UA [hidden]{display:none}, so
+         without this the banner shows for EVERYONE (incl. viewers). Let hidden win. */
+      .stage .selfnote[hidden] { display: none; }
+      .stage .popout {
+        position: absolute; top: 8px; right: 8px; display: none;
+        background: rgba(0, 0, 0, 0.55); padding: 5px 7px; border-radius: 7px;
+      }
+      body.has-stage .stage .popout { display: inline-flex; }
+      .stage .popnote {
+        position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+        color: #8fd3b0; background: #06170f; font-weight: 600; gap: 7px;
+      }
+      .stage .popnote[hidden] { display: none; }
+
+      .tiles {
+        flex: 1 1 auto;
+        overflow-y: auto;
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+        gap: 8px;
+        padding: 12px;
+        align-content: start;
+      }
+      body.has-stage .tiles {
+        flex: 0 0 auto;
+        display: flex;
+        gap: 6px;
+        overflow-x: auto;
+        overflow-y: hidden;
+        padding: 8px 12px;
+      }
+      body.has-stage .tile { flex: 0 0 84px; }
+      .tile {
+        position: relative;
+        aspect-ratio: 4 / 3;
+        background: #06170f;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 10px;
+        overflow: hidden;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .tile.speaking { border-color: #2a9d6a; box-shadow: 0 0 0 2px rgba(42, 157, 106, 0.5); }
+      .tile video { width: 100%; height: 100%; object-fit: cover; background: #000; }
+      .tile video.mirror { transform: scaleX(-1); }
+      .tile .avatar {
+        width: 40px; height: 40px; border-radius: 50%;
+        background: #1f6f4f; color: #fff; font-weight: 700;
+        display: flex; align-items: center; justify-content: center;
+      }
+      .tile .label {
+        position: absolute; left: 6px; bottom: 6px;
+        font-size: 0.74em; background: rgba(0, 0, 0, 0.55);
+        padding: 1px 6px; border-radius: 6px; max-width: 90%;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      }
+      .tile .badge { position: absolute; right: 5px; top: 5px; background: rgba(0,0,0,.55); padding: 2px 5px; border-radius: 6px; display: inline-flex; }
+      .empty { grid-column: 1 / -1; color: #7fa593; text-align: center; padding: 20px 8px; }
+
+      .status { padding: 0 12px 6px; font-size: 0.8em; color: #7fa593; min-height: 1.2em; flex: 0 0 auto; }
+
+      /* Shown in the side panel after the live call is handed off to a big window. */
+      .handoff { position: fixed; inset: 0; z-index: 50; background: #0b241c;
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        gap: 14px; text-align: center; padding: 24px; }
+      .handoff[hidden] { display: none; }
+      .handoff .big { font-size: 2rem; }
+      .handoff p { color: #8fd3b0; margin: 0; }
+
+      .join { display: flex; gap: 6px; padding: 0 12px 8px; flex: 0 0 auto; }
+      body.has-stage .join { display: none; }
+      .join input {
+        flex: 1; min-width: 0; background: rgba(0, 0, 0, 0.3);
+        border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 8px;
+        color: #e7f3ec; padding: 7px 9px; font: inherit;
+      }
+
+      /* Chat — collapsed to a thin bar by default; click to open. */
+      .chat { flex: 0 0 auto; display: flex; flex-direction: column;
+        border-top: 1px solid rgba(255, 255, 255, 0.08); }
+      .chat:not(.collapsed) { flex: 0 0 34vh; min-height: 160px; }
+      body.has-stage .chat:not(.collapsed) { flex: 0 0 24vh; min-height: 110px; }
+      .chattab {
+        display: flex; align-items: center; gap: 7px; width: 100%;
+        background: rgba(255, 255, 255, 0.06); color: #cfe6da; border-radius: 0;
+        padding: 8px 12px; font-weight: 600; text-align: left;
+      }
+      .chattab .unread {
+        margin-left: auto; background: #b3261e; color: #fff; border-radius: 999px;
+        padding: 0 7px; font-size: 0.78em; min-width: 18px; text-align: center; font-weight: 700;
+      }
+      .chat.collapsed .chatbody { display: none; }
+      .chatbody { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+      .chathead { padding: 6px 12px 0; font-size: 0.78em; color: #7fa593; display: flex; align-items: center; gap: 6px; }
+      .chathead input {
+        flex: 1; min-width: 0; background: rgba(0, 0, 0, 0.25);
+        border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 6px;
+        color: #e7f3ec; padding: 3px 7px; font: inherit; font-size: 1em;
+      }
+      .msgs { flex: 1 1 auto; overflow-y: auto; padding: 8px 12px; display: flex; flex-direction: column; gap: 5px; }
+      .msg { font-size: 0.9em; word-break: break-word; }
+      .msg .from { color: #8fd3b0; font-weight: 700; margin-right: 5px; }
+      .msg.me .from { color: #cda2ff; }
+      .emojirow { display: flex; flex-wrap: wrap; gap: 2px; padding: 4px 10px 0; }
+      .emoji { background: transparent; border: 0; font-size: 1.15em; padding: 2px 4px; line-height: 1; }
+      .chatrow { display: flex; gap: 6px; padding: 6px 12px 8px; }
+      .chatrow input {
+        flex: 1; min-width: 0; background: rgba(0, 0, 0, 0.3);
+        border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 8px;
+        color: #e7f3ec; padding: 7px 9px; font: inherit;
+      }
+
+      footer.ctrls {
+        display: flex; gap: 8px; padding: 10px 12px;
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+        flex: 0 0 auto;
+      }
+      footer.ctrls button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+
+      /* Lobby / knock-to-admit. Host bar: a toggle + an admit/deny queue. */
+      .lobbybar { flex: 0 0 auto; display: flex; flex-direction: column; gap: 6px;
+        padding: 8px 12px; background: rgba(255, 255, 255, 0.03);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
+      .lobbybar[hidden] { display: none; }
+      .lobtoggle { width: 100%; text-align: left; font-weight: 600;
+        background: rgba(255, 255, 255, 0.08); color: #e7f3ec; }
+      .lobtoggle.on { background: rgba(210, 153, 34, 0.16); color: #f0c674;
+        box-shadow: inset 0 0 0 1px #d29922; }
+      .knocks { display: flex; flex-direction: column; gap: 5px; }
+      .knockrow { display: flex; align-items: center; gap: 6px; padding: 5px 7px;
+        background: rgba(0, 0, 0, 0.25); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; }
+      .knockrow .who { flex: 1; min-width: 0; font-size: 0.86em;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .knockrow button { padding: 4px 9px; font-size: 0.82em; }
+      .knockrow .deny { background: transparent; color: #ff8d85;
+        box-shadow: inset 0 0 0 1px rgba(255, 141, 133, 0.5); }
+      /* Joiner: a note while we're held at (or refused from) the door. */
+      .lobbynote { flex: 0 0 auto; margin: 8px 12px 0; padding: 9px 11px; border-radius: 8px;
+        font-size: 0.86em; text-align: center;
+        background: rgba(210, 153, 34, 0.12); color: #f0c674; }
+      .lobbynote[hidden] { display: none; }
+      .lobbynote.denied { background: rgba(179, 38, 30, 0.16); color: #ff8d85; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <span class="brand">Kibitz</span>
+      <span class="room" id="room" title="Room — share the invite link or QR">…</span>
+      <button id="copy" class="ghost">Copy invite</button>
+      <button id="qrBtn" class="ghost" title="Show a QR to join from a phone">📱</button>
+      <button id="upgrade" class="ghost" title="Relay &amp; upgrade options">⚡</button>
+    </header>
+
+    <!-- QR to join from a phone — opens the web room (no extension needed to watch). -->
+    <div class="qrpanel" id="qrpanel" hidden>
+      <div class="qr" id="qr"></div>
+      <p class="qr-url" id="qrUrl"></p>
+      <p class="qr-hint">Scan from a phone to watch + talk — opens in the browser, no install. Only presenting a tab needs the extension.</p>
+    </div>
+
+    <div class="license" id="license" hidden>
+      <p class="lic-info">Premium relay, unlocked with a key — saved to your Chrome and synced across your devices. <a href="#" id="getKey">Get one →</a></p>
+      <div class="lic-row">
+        <input id="keyInput" placeholder="paste license key" autocomplete="off" spellcheck="false" />
+        <button id="keySave">Save</button>
+      </div>
+      <p class="lic-status" id="keyStatus"></p>
+    </div>
+
+    <!-- Lobby / knock-to-admit. The host bar (toggle + queue) shows for the room
+         owner; the joiner note shows while we're held at the door. -->
+    <div class="lobbybar" id="lobbybar" hidden>
+      <button class="lobtoggle" id="lobToggle" type="button"></button>
+      <div class="knocks" id="knocks"></div>
+    </div>
+    <div class="lobbynote" id="lobbyNote" hidden></div>
+
+    <div class="stage" id="stage">
+      <video id="stageVid" autoplay playsinline muted></video>
+      <div class="selfnote" id="stageSelf" hidden><span class="ic" id="selfIc"></span> You’re presenting this tab to everyone.</div>
+      <span class="who" id="stageWho"></span>
+      <button class="popout" id="popout" title="Open the shared page in a big floating window"></button>
+      <div class="popnote" id="popnote" hidden>Showing in the pop-out window ↗</div>
+    </div>
+
+    <div class="tiles" id="tiles"><div class="empty">Connecting…</div></div>
+
+    <div class="status" id="status"></div>
+    <div class="join" id="join">
+      <input id="joinInput" placeholder="enter a room code to join" />
+      <button id="joinBtn" class="ghost">Join</button>
+    </div>
+
+    <div class="chat collapsed" id="chat">
+      <button class="chattab" id="chatTab">
+        <span class="ic" id="chatIc"></span><span>Chat</span><span class="unread" id="unread" hidden></span>
+      </button>
+      <div class="chatbody">
+        <div class="chathead">You: <input id="nameInput" maxlength="24" placeholder="your name" /></div>
+        <div class="msgs" id="msgs"></div>
+        <div class="emojirow" id="emojiRow"></div>
+        <div class="chatrow">
+          <input id="chatInput" placeholder="Message everyone…" />
+          <button id="chatSend">Send</button>
+        </div>
+      </div>
+    </div>
+
+    <footer class="ctrls">
+      <button id="mic" class="ghost"></button>
+      <button id="cam" class="ghost"></button>
+      <button id="share"></button>
+    </footer>
+    <div class="handoff" id="handoff" hidden>
+      <div class="big">🖥️↗</div>
+      <p>Watching in the big window.</p>
+      <button id="bringBack">Bring it back here</button>
+    </div>
+    <!-- The Kibitz call engine (sets window.Kibitz) — must load before the app. -->
+    <script src="widget.js"></script>
+    <script src="sidepanel.js"></script>
+  </body>
+</html>
