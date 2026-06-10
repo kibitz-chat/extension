@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Kibitz — co-browse + call over any page, for people and AI",
+  "version": "0.3.0",
+  "description": "Co-browse any page together in an end-to-end-encrypted call — voice, video, chat. Your tab follows you; people and AI.",
+  "action": { "default_title": "Kibitz: open the panel" },
+  "background": { "service_worker": "background.js" },
+  "side_panel": { "default_path": "sidepanel.html" },
+  "permissions": ["sidePanel", "tabCapture", "activeTab", "tabs", "storage"],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
