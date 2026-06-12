@@ -87,4 +87,4 @@ npm run typecheck    # optional: type-check against src/kibitz.d.ts
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+AGPL-3.0-or-later — see [LICENSE](LICENSE). Part of the AGPL-licensed Kibitz project (github.com/kibitz-chat/kibitz).

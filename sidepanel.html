@@ -301,6 +301,23 @@
       .whoprem-row input { flex: 1; min-width: 0; }
       .whoprem-ok { margin: 0; font-size: 0.78em; color: #8fd3b0; font-weight: 600; }
       .whoprem-ok[hidden] { display: none; }
+
+      /* Host-only agent capability consent. */
+      .agentbar { flex: 0 0 auto; padding: 9px 12px; background: rgba(143, 211, 176, 0.08);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08); display: flex; flex-direction: column; gap: 7px; }
+      .agentbar[hidden] { display: none; }
+      .agentbar h4 { margin: 0; font-size: 0.86em; color: #8fd3b0; font-weight: 700; }
+      .agentrow { display: flex; flex-direction: column; gap: 5px; padding: 7px;
+        background: rgba(0, 0, 0, 0.18); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; }
+      .agentrow .who { font-size: 0.85em; font-weight: 600; }
+      .agentrow .who .back { font-weight: 400; opacity: 0.7; }
+      .agentcaps { display: flex; flex-wrap: wrap; gap: 4px; }
+      .agentcap { font: inherit; font-size: 0.74em; padding: 2px 7px; border-radius: 999px; cursor: pointer;
+        border: 1px solid rgba(255, 255, 255, 0.18); background: rgba(255, 255, 255, 0.06); color: #bcd; }
+      .agentcap.on { background: #18794e; color: #fff; }
+      .agentrevoke { align-self: flex-start; font: inherit; font-size: 0.74em; padding: 2px 7px; cursor: pointer;
+        background: transparent; color: #ff8d85; border: 1px solid rgba(255, 141, 133, 0.4); border-radius: 999px; }
+      .agentaudit { font-size: 0.72em; opacity: 0.7; line-height: 1.5; }
     </style>
   </head>
   <body>
@@ -342,6 +359,9 @@
       <div class="vmsg" id="vmsg"></div>
       <button class="vbtn ghost" id="vbtn" type="button" hidden>Verify to join</button>
     </div>
+
+    <!-- Host-only: per-agent capability consent (what each agent may perceive/act). -->
+    <div class="agentbar" id="agentbar" hidden></div>
 
     <!-- "Who can join?" — build a verified-room link from the panel. -->
     <div class="whopanel" id="whopanel" hidden>

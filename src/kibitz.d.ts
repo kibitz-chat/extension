@@ -20,6 +20,30 @@ export interface Participant {
   role: 'host' | 'guest'
 }
 
+/** A participant's capability grant — what it may perceive (content flowing to it) and act (what
+ *  it emits). Humans default to full; agents (meta.role='agent') to read-only. The engine enforces
+ *  it per-peer. Mirrors src/core/capabilities.ts (kept local so the extension builds standalone). */
+export type Perceive = 'see-screen' | 'hear-audio' | 'read-chat' | 'read-roster' | 'receive-directed'
+export type Act = 'send-chat' | 'speak' | 'act'
+export interface Grant {
+  perceive: Perceive[]
+  act: Act[]
+  /** Disclosure (agents): the model/backend it routes to — shown, not enforced. */
+  backend?: string
+  /** Disclosure (agents): does what it perceives leave the E2EE room? */
+  egress?: boolean
+  /** Auto-revoke at this epoch-seconds time. */
+  expiresAt?: number
+}
+
+/** One local capability-audit event (host-visible; nothing stored or sent). */
+export interface AuditEntry {
+  ts: number
+  id: string
+  kind: 'blocked' | 'granted'
+  detail: string
+}
+
 /** One person waiting at the door, as the host sees them. */
 export interface Knock {
   id: string
@@ -141,6 +165,12 @@ export interface MountedWidget {
   identityNonce(): Promise<string | null>
   /** Adopt a cert-bound token minted out-of-page (signed against `identityNonce()`). */
   provideIdentityToken(jwt: string): Promise<boolean>
+  /** A participant's effective capability grant (what it may perceive/act). Host-side consent UI. */
+  getCapabilityGrant(id: string): Grant
+  /** Set (null clears) a participant's capability override; the engine enforces it. Host action. */
+  setCapabilityGrant(id: string, grant: Grant | null): void
+  /** Recent local capability-audit events for a participant — blocked acts + grant changes. */
+  getAgentAudit(id: string): readonly AuditEntry[]
   on(event: 'participants', cb: (people: Participant[]) => void): () => void
   on(event: 'join' | 'leave', cb: (p: Participant) => void): () => void
   on(event: 'speaking', cb: (ids: string[]) => void): () => void

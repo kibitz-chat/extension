@@ -534,6 +534,101 @@ async function openVerifyPopup(): Promise<void> {
   renderVerify()
 }
 
+// --- Host-only agent capability consent --------------------------------------
+// The visible face of the capability layer (engine enforces it, host-local). For each AGENT in the
+// room (meta.role='agent') the host toggles what it may perceive/act + revokes. Grants live in the
+// engine; we re-read after each change. Inert unless we're the host and agents are present.
+const PERCEIVE_CAPS = ['see-screen', 'hear-audio', 'read-chat', 'read-roster', 'receive-directed'] as const
+const ACT_CAPS = ['send-chat', 'speak', 'act'] as const
+const CAP_LABEL: Record<string, string> = {
+  'see-screen': 'see screen',
+  'hear-audio': 'hear audio',
+  'read-chat': 'read chat',
+  'read-roster': 'see who’s here',
+  'receive-directed': 'private data',
+  'send-chat': 'post chat',
+  'speak': 'speak',
+  'act': 'act / control',
+}
+
+function toggleCap(id: string, cap: string): void {
+  if (!call) return
+  const g = call.getCapabilityGrant(id)
+  const key = (PERCEIVE_CAPS as readonly string[]).includes(cap) ? 'perceive' : 'act'
+  const list = [...(g[key] as string[])]
+  const next = list.includes(cap) ? list.filter((c) => c !== cap) : [...list, cap]
+  call.setCapabilityGrant(id, { ...g, [key]: next })
+}
+
+function renderAgents(): void {
+  const bar = el('agentbar')
+  if (!call) {
+    bar.hidden = true
+    return
+  }
+  const agents = call.getParticipants().filter((p) => !p.isSelf && p.meta?.role === 'agent')
+  if (!call.getState().isHost || !agents.length) {
+    bar.hidden = true
+    return
+  }
+  bar.hidden = false
+  bar.replaceChildren()
+  const h = document.createElement('h4')
+  h.textContent = '🤖 Agents — what each may do'
+  bar.appendChild(h)
+  for (const a of agents) {
+    const g = call.getCapabilityGrant(a.id)
+    const row = document.createElement('div')
+    row.className = 'agentrow'
+    const who = document.createElement('div')
+    who.className = 'who'
+    who.textContent = a.name || 'Agent'
+    if (g.backend) {
+      const b = document.createElement('span')
+      b.className = 'back'
+      b.textContent = ` · ${g.backend}${g.egress ? ' — leaves the room' : ''}`
+      who.appendChild(b)
+    }
+    row.appendChild(who)
+    const caps = document.createElement('div')
+    caps.className = 'agentcaps'
+    for (const cap of [...PERCEIVE_CAPS, ...ACT_CAPS]) {
+      const on = (g.perceive as string[]).includes(cap) || (g.act as string[]).includes(cap)
+      const btn = document.createElement('button')
+      btn.type = 'button'
+      btn.className = `agentcap${on ? ' on' : ''}`
+      btn.textContent = `${on ? '✓' : '+'} ${CAP_LABEL[cap]}`
+      btn.onclick = () => {
+        toggleCap(a.id, cap)
+        renderAgents()
+      }
+      caps.appendChild(btn)
+    }
+    row.appendChild(caps)
+    const rev = document.createElement('button')
+    rev.type = 'button'
+    rev.className = 'agentrevoke'
+    rev.textContent = 'Revoke all'
+    rev.onclick = () => {
+      call?.setCapabilityGrant(a.id, { perceive: [], act: [] })
+      renderAgents()
+    }
+    row.appendChild(rev)
+    const events = call.getAgentAudit(a.id).slice(0, 4)
+    if (events.length) {
+      const feed = document.createElement('div')
+      feed.className = 'agentaudit'
+      for (const e of events) {
+        const line = document.createElement('div')
+        line.textContent = e.kind === 'blocked' ? `⛔ tried to ${e.detail} (blocked)` : `⚙ permissions: ${e.detail}`
+        feed.appendChild(line)
+      }
+      row.appendChild(feed)
+    }
+    bar.appendChild(row)
+  }
+}
+
 // --- "Who can join?" — build a verified-room link from the panel ---------------
 // A compact inline version of the web's create screen: a roster of people, each with a method
 // (Sign in / Any verified @domain / Email code), → buildVerifiedRoster → a single shareable link
@@ -775,6 +870,7 @@ async function start(room: string, opts: StartOpts = {}): Promise<void> {
   updateControls()
   renderLobby()
   renderVerify()
+  renderAgents()
   // Lobby: the host's queue changed, or our own knock status did.
   call.on('knocks', () => renderLobby())
   call.on('lobby', () => renderLobby())
@@ -783,6 +879,7 @@ async function start(room: string, opts: StartOpts = {}): Promise<void> {
     updateControls()
     renderLobby()
     renderVerify()
+    renderAgents()
     // Someone newer took the presenter role → drop ours (one stage, always).
     if (call?.getState().sharing && p.some((q) => !q.isSelf && presentAtOf(q) > myPresentAt)) {
       call.stopShare()
@@ -797,6 +894,7 @@ async function start(room: string, opts: StartOpts = {}): Promise<void> {
     updateControls()
     renderLobby()
     renderVerify()
+    renderAgents()
     if (!s.sharing && lastSharing) {
       myPresentAt = 0
       call?.setMeta({ presenting: false })
