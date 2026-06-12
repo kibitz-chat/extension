@@ -40,6 +40,14 @@ export interface CallState {
   lobbyOn: boolean
   locked: boolean
   lobbyStatus: LobbyJoinerStatus
+  /** Verified identity is configured for this room. */
+  identityEnabled: boolean
+  /** Our own verified email once signed in (null until then). */
+  selfEmail: string | null
+  /** Verified-roster: active, may content flow, off-roster peer present. */
+  rosterActive: boolean
+  rosterCanShare: boolean
+  rosterCompromised: boolean
 }
 
 export interface MountOptions {
@@ -54,6 +62,42 @@ export interface MountOptions {
   turnHost?: string
   licenseKey?: string
   grant?: string
+  /** Opt-in verified identity (peer-to-peer, no server) — a "Continue with Google"
+   *  button in the lobby; verified peers get a ✓ badge bound to their encrypted
+   *  connection. Omit to stay account-free. See §2a of the docs. */
+  verifyIdentity?: {
+    provider: 'google'
+    /** Your OAuth client_id (register a Web client; add your origin to Authorized JS origins). */
+    clientId: string
+    /** Override the accepted issuer(s) / discovery issuer for non-Google OIDC providers. */
+    issuer?: string | string[]
+    discoveryIssuer?: string
+    /** Require a verified identity to stay — the lobby blocks Join until you sign in,
+     *  and the host removes anyone unverified. The host can also toggle this live. */
+    require?: boolean
+    /** With `require`, restrict to these email domains (e.g. ['acme.com']); matches the
+     *  email domain or the Google Workspace `hd` claim. */
+    allowedDomains?: string[]
+    /** With `require`, restrict to these exact verified emails (a per-person guest list,
+     *  e.g. ['alice@acme.com']). Combined with `allowedDomains` as a union; both empty →
+     *  any verified identity is allowed. */
+    allowedEmails?: string[]
+  }
+  /** A verified-room gate descriptor (decoded from a link's `?g/gc/gk/gm` params) — drives
+   *  the authority's admission gate + the verified-roster mutual pre-share. */
+  joinGate?: {
+    mode: 'open' | 'names' | 'code' | 'email' | 'google' | 'invite'
+    names?: string[]
+    pubKey?: JsonWebKey
+    manifest?: string
+    clientId?: string
+  }
+  /** This peer's own signed invite token, for an invite-mode gate. */
+  joinCredential?: string
+  /** Absolute base URL of the Kibitz email-code backend (issuer + /api/email/jwks). The side
+   *  panel runs on chrome-extension://, so it must point email-method verification at
+   *  https://kibitz.chat rather than its own origin. */
+  apiBase?: string
 }
 
 export interface MountedWidget {
@@ -88,6 +132,15 @@ export interface MountedWidget {
   /** Reset the room (host only) — clear everyone's ephemeral chat. */
   resetRoom(): void
   knock(name: string, avatar: string): void
+  /** Verified rooms: render the provider's sign-in into `container` (Google button, or the
+   *  email→code form for `method:'email'`); on success the cert-bound token is broadcast. */
+  signInIdentity(container: HTMLElement, method?: 'google' | 'email'): Promise<boolean>
+  /** The cert-bound nonce an EXTERNAL sign-in surface must echo so its minted token binds to
+   *  THIS connection. Null until the cert is ready. The side panel passes it to the kibitz.chat
+   *  verify popup; the returned token comes back via `provideIdentityToken`. */
+  identityNonce(): Promise<string | null>
+  /** Adopt a cert-bound token minted out-of-page (signed against `identityNonce()`). */
+  provideIdentityToken(jwt: string): Promise<boolean>
   on(event: 'participants', cb: (people: Participant[]) => void): () => void
   on(event: 'join' | 'leave', cb: (p: Participant) => void): () => void
   on(event: 'speaking', cb: (ids: string[]) => void): () => void
@@ -102,6 +155,11 @@ export interface MountedWidget {
       lobbyOn: boolean
       locked: boolean
       lobbyStatus: LobbyJoinerStatus
+      identityEnabled: boolean
+      selfEmail: string | null
+      rosterActive: boolean
+      rosterCanShare: boolean
+      rosterCompromised: boolean
     }) => void,
   ): () => void
   on(event: 'knocks', cb: (knocks: Knock[]) => void): () => void

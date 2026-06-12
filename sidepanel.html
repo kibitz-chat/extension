@@ -242,6 +242,65 @@
         background: rgba(210, 153, 34, 0.12); color: #f0c674; }
       .lobbynote[hidden] { display: none; }
       .lobbynote.denied { background: rgba(179, 38, 30, 0.16); color: #ff8d85; }
+
+      /* Verified-room sign-in / status. The actual Google/email sign-in runs in a
+         kibitz.chat popup (this chrome-extension:// origin can't run Google's button
+         or our email backend) — this bar just prompts + reflects the verified state. */
+      .verifybar { flex: 0 0 auto; display: flex; flex-direction: column; gap: 7px;
+        padding: 10px 12px; background: rgba(143, 211, 176, 0.09);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
+      .verifybar[hidden] { display: none; }
+      .verifybar.ok { background: rgba(42, 157, 106, 0.14); }
+      .verifybar.alarm { background: rgba(179, 38, 30, 0.18); }
+      .verifybar .vmsg { font-size: 0.86em; color: #cfe6da; line-height: 1.45; }
+      .verifybar.alarm .vmsg { color: #ffb4ad; font-weight: 600; }
+      .verifybar .vbtn { align-self: flex-start; }
+      .verifybar .vbtn[hidden] { display: none; }
+
+      /* "Who can join?" creator form — a compact inline roster editor. */
+      .whopanel { flex: 0 0 auto; padding: 12px; background: rgba(255, 255, 255, 0.03);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08); display: flex;
+        flex-direction: column; gap: 9px; }
+      .whopanel[hidden] { display: none; }
+      .whopanel h3 { margin: 0; font-size: 0.95em; color: #8fd3b0; }
+      .whopanel label { font-size: 0.78em; color: #9fc4b3; display: block; margin-bottom: 3px; }
+      .whopanel input, .whopanel select { width: 100%; background: rgba(0, 0, 0, 0.3);
+        border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 8px;
+        color: #e7f3ec; padding: 7px 9px; font: inherit; }
+      .whopanel .seg { display: flex; gap: 6px; }
+      .whopanel .seg button { flex: 1; background: rgba(255, 255, 255, 0.08); color: #cfe6da; }
+      .whopanel .seg button.sel { background: #18794e; color: #fff; }
+      .whorows { display: flex; flex-direction: column; gap: 7px; }
+      .whorow { display: flex; flex-direction: column; gap: 5px; padding: 8px;
+        background: rgba(0, 0, 0, 0.22); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 9px; }
+      .whorow .r1 { display: flex; gap: 6px; }
+      .whorow .r1 input { flex: 1; min-width: 0; }
+      .whorow .r1 select { flex: 0 0 116px; }
+      .whorow .r2 { display: flex; gap: 6px; align-items: center; }
+      .whorow .r2 input.who-id { flex: 1; min-width: 0; }
+      .whorow .r2 label { display: inline-flex; align-items: center; gap: 4px; margin: 0;
+        font-size: 0.76em; white-space: nowrap; }
+      .whorow .who-rm { flex: 0 0 auto; background: transparent; color: #ff8d85;
+        box-shadow: inset 0 0 0 1px rgba(255, 141, 133, 0.4); padding: 5px 8px; }
+      .whopanel .who-host { font-size: 0.72em; color: #7fa593; margin: -2px 0 2px; }
+      .whoacts { display: flex; gap: 6px; }
+      .whoacts button { flex: 1; }
+      .whoacts .ghost { background: rgba(255, 255, 255, 0.1); }
+      /* Premium relay (opener-pays) row inside the create form — collapsed behind its header. */
+      .whoprem { padding: 9px;
+        background: rgba(0, 0, 0, 0.18); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 9px; }
+      .whoprem-h { display: flex; width: 100%; align-items: center; justify-content: space-between;
+        gap: 8px; background: none; border: 0; padding: 0; font: inherit; font-size: 0.9em; font-weight: 700;
+        color: #cfe6da; cursor: pointer; text-align: left; }
+      .whoprem-h em { font-style: normal; font-weight: 400; opacity: 0.6; }
+      .whoprem-caret { opacity: 0.55; }
+      .whoprem-body { display: flex; flex-direction: column; gap: 6px; margin-top: 7px; }
+      .whoprem-body[hidden] { display: none; }
+      .whoprem-fine { margin: 0; font-size: 0.76em; color: #9fc4b3; }
+      .whoprem-row { display: flex; gap: 6px; }
+      .whoprem-row input { flex: 1; min-width: 0; }
+      .whoprem-ok { margin: 0; font-size: 0.78em; color: #8fd3b0; font-weight: 600; }
+      .whoprem-ok[hidden] { display: none; }
     </style>
   </head>
   <body>
@@ -277,6 +336,52 @@
     </div>
     <div class="lobbynote" id="lobbyNote" hidden></div>
 
+    <!-- Verified-room sign-in / status (shown only when the room requires a verified
+         identity). The Verify button opens a kibitz.chat popup to actually sign in. -->
+    <div class="verifybar" id="verifybar" hidden>
+      <div class="vmsg" id="vmsg"></div>
+      <button class="vbtn ghost" id="vbtn" type="button" hidden>Verify to join</button>
+    </div>
+
+    <!-- "Who can join?" — build a verified-room link from the panel. -->
+    <div class="whopanel" id="whopanel" hidden>
+      <h3>Who can join?</h3>
+      <div>
+        <label for="whoDesc">Room name (optional)</label>
+        <input id="whoDesc" maxlength="60" placeholder="e.g. Tuesday standup" />
+      </div>
+      <div class="seg" id="whoAccess">
+        <button type="button" data-access="open" class="sel">Anyone with the link</button>
+        <button type="button" data-access="verified">Only verified participants</button>
+      </div>
+      <div id="whoVerified" hidden>
+        <p class="who-host">The first person on the list is the host.</p>
+        <div class="whorows" id="whoRows"></div>
+        <button type="button" class="ghost" id="whoAdd" style="margin-top:7px">+ Add person</button>
+        <div style="margin-top:9px">
+          <label for="whoClient">Google sign-in app (client id)</label>
+          <input id="whoClient" placeholder="…apps.googleusercontent.com" autocomplete="off" spellcheck="false" />
+        </div>
+      </div>
+      <div class="whoprem">
+        <button type="button" class="whoprem-h" id="whoPremToggle" aria-expanded="false">
+          <span>⚡ Premium <em>(optional)</em></span><span class="whoprem-caret">▸</span>
+        </button>
+        <div class="whoprem-body" id="whoPremBody" hidden>
+          <p class="whoprem-fine">Sponsor your room’s infrastructure for everyone you invite — a reliable relay, plus verification emails when you use email-code. One key covers both; it never leaves this browser.</p>
+          <div class="whoprem-row">
+            <input id="whoPremKey" placeholder="paste premium key" autocomplete="off" spellcheck="false" />
+            <button type="button" id="whoPremSave">Save</button>
+          </div>
+          <p class="whoprem-ok" id="whoPremOk" hidden>✓ Premium key saved — sponsored relay + emails for guests you invite.</p>
+        </div>
+      </div>
+      <div class="whoacts">
+        <button type="button" class="ghost" id="whoCancel">Cancel</button>
+        <button type="button" id="whoCreate">Create room</button>
+      </div>
+    </div>
+
     <div class="stage" id="stage">
       <video id="stageVid" autoplay playsinline muted></video>
       <div class="selfnote" id="stageSelf" hidden><span class="ic" id="selfIc"></span> You’re presenting this tab to everyone.</div>
@@ -289,8 +394,9 @@
 
     <div class="status" id="status"></div>
     <div class="join" id="join">
-      <input id="joinInput" placeholder="enter a room code to join" />
+      <input id="joinInput" placeholder="paste a room link or code to join" />
       <button id="joinBtn" class="ghost">Join</button>
+      <button id="whoBtn" class="ghost" title="Create a room and choose who can join">🔒 New</button>
     </div>
 
     <div class="chat collapsed" id="chat">

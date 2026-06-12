@@ -6,6 +6,11 @@
 // via <script> in sidepanel.html — NOT bundled here. That keeps this app small and,
 // crucially, buildable on its own (no monorepo). Types: ./kibitz.d.ts.
 import { qrSvg } from '../core/qr'
+import { normalizeRoom } from '../core/transport'
+import { encodeGateParams, type GateDescriptor } from '../core/joinGateLink'
+import { buildVerifiedRoster, type InviteeInput } from '../core/joinGateRuntime'
+import { linkWithGrant, requestRoomGrant } from '../core/grant'
+import { identityFromGate, parseRoomLink } from './roomLink'
 import type { KibitzGlobal, MountedWidget, Participant } from './kibitz'
 
 // widget.js (loaded first in sidepanel.html) installs window.Kibitz.
@@ -54,7 +59,20 @@ const UPGRADE_URL = 'https://kibitz.chat/docs#turn'
 // URL hash, normalized the same on both sides). A non-extension viewer clicks or
 // scans this to join + watch — no install. Only PRESENTING a tab needs the extension.
 const WEB_BASE = 'https://kibitz.chat'
-const inviteUrl = (room: string): string => `${WEB_BASE}/#${room}`
+// The shareable link for a room. An OPEN room is just `…/#room`; a verified room re-encodes the
+// link-carried gate (mode, client id, creator pubkey, signed roster) + the description — the SAME
+// link the web app reads, so the room opens identically in a browser, the widget, or here. The
+// per-peer invite token (`gt`) is deliberately NOT included: you share the room, not your own seat.
+function linkFor(room: string, gate: GateDescriptor, desc?: string): string {
+  if (!gate || gate.mode === 'open') return `${WEB_BASE}/#${room}`
+  const params = encodeGateParams(gate)
+  if (desc) params.set('d', desc)
+  const u = new URL(`${WEB_BASE}/`)
+  u.search = params.toString()
+  u.hash = room
+  return u.toString()
+}
+const inviteUrl = (room: string): string => linkFor(room, currentGate, currentDesc)
 const el = <T extends HTMLElement = HTMLElement>(id: string): T => document.getElementById(id) as T
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -122,6 +140,14 @@ const dbg = (...args: unknown[]): void => {
 let call: MountedWidget | null = null
 let myName = 'You'
 let currentRoom = ''
+// The live room's admission gate + this peer's seat credential + the human label. An open room
+// leaves these at their defaults; opening a verified link (or creating one) fills them, and they
+// drive the mount options, the shareable link, and the verify bar.
+let currentGate: GateDescriptor = { mode: 'open' }
+let currentCred: string | undefined
+let currentDesc = ''
+let currentGrant: string | undefined // sponsor room-grant adopted from a joined link (opener-pays)
+let verifyPopup: Window | null = null
 let bigWinId: number | null = null // (side panel only) the open big window, if any
 // Presenter take-over: each new presenter stamps a higher sequence in roster meta,
 // so the newest wins the stage and older presenters auto-stop (one stage, always).
@@ -433,6 +459,224 @@ function renderLobby(): void {
   }
 }
 
+// --- Verified rooms ----------------------------------------------------------
+// Google's button + our email backend can't run on this chrome-extension:// origin, so the
+// "Verify" button opens a kibitz.chat popup that signs in with the engine's cert-bound nonce
+// and posts the token back (adopted by the message listener in init via provideIdentityToken).
+// The bar otherwise reflects the verified-roster state the engine reports. Inert for open rooms.
+function renderVerify(): void {
+  const bar = el('verifybar')
+  if (!call) {
+    bar.hidden = true
+    return
+  }
+  const s = call.getState()
+  if (!s.identityEnabled) {
+    bar.hidden = true
+    return
+  }
+  bar.hidden = false
+  const msg = el('vmsg')
+  const btn = el<HTMLButtonElement>('vbtn')
+  bar.classList.remove('ok', 'alarm')
+  if (s.rosterCompromised) {
+    bar.classList.add('alarm')
+    msg.textContent =
+      '⚠️ Someone here isn’t on the verified list — content is held. Leave if you didn’t expect that.'
+    btn.hidden = true
+    return
+  }
+  if (s.selfEmail) {
+    bar.classList.add('ok')
+    msg.textContent =
+      s.rosterActive && !s.rosterCanShare
+        ? `✓ Verified as ${s.selfEmail} — waiting for everyone else to verify before content flows…`
+        : `✓ Verified as ${s.selfEmail}.`
+    btn.hidden = true
+    return
+  }
+  msg.textContent = '🔒 This room is for verified participants. Verify to be let in — and to see or share content.'
+  btn.hidden = false
+  btn.textContent = verifyPopup && !verifyPopup.closed ? 'Continue in the popup…' : 'Verify to join'
+}
+
+/** Open the kibitz.chat verify popup for THIS connection (passing its cert-bound nonce). */
+async function openVerifyPopup(): Promise<void> {
+  if (!call) return
+  if (verifyPopup && !verifyPopup.closed) {
+    verifyPopup.focus()
+    return
+  }
+  setStatus('Preparing a secure verification…')
+  const nonce = await call.identityNonce()
+  if (!nonce) {
+    setStatus('Couldn’t prepare verification yet — wait a moment, then tap Verify again.')
+    return
+  }
+  const params = new URLSearchParams({
+    kibitzVerify: '1',
+    nonce,
+    client: currentGate.clientId ?? '',
+    room: normalizeRoom(currentRoom),
+    methods: 'google,email',
+    opener: location.origin, // the popup posts the token back to exactly this origin
+  })
+  if (currentDesc) params.set('d', currentDesc)
+  // Carry the adopted sponsor grant so an email-code send in the popup is billed to the room's
+  // premium key (opener-pays), not the free pool.
+  if (currentGrant) params.set('grant', currentGrant)
+  verifyPopup = window.open(`${WEB_BASE}/?${params.toString()}`, 'kibitzVerify', 'width=420,height=620')
+  if (!verifyPopup) {
+    setStatus('Your browser blocked the verification window — allow popups for the panel and retry.')
+    return
+  }
+  setStatus('Finish signing in in the window that opened…')
+  renderVerify()
+}
+
+// --- "Who can join?" — build a verified-room link from the panel ---------------
+// A compact inline version of the web's create screen: a roster of people, each with a method
+// (Sign in / Any verified @domain / Email code), → buildVerifiedRoster → a single shareable link
+// the gate runs from. The creator is the host (first row) and still has to verify like everyone.
+function makeWhoRow(isHost: boolean): HTMLElement {
+  const row = document.createElement('div')
+  row.className = 'whorow'
+  const r1 = document.createElement('div')
+  r1.className = 'r1'
+  const name = document.createElement('input')
+  name.className = 'who-name'
+  name.placeholder = isHost ? 'Your name' : 'Name (optional)'
+  name.maxLength = 40
+  const method = document.createElement('select')
+  method.className = 'who-method'
+  for (const [v, label] of [
+    ['signin', 'Sign in'],
+    ['oidc', 'Any @domain'],
+    ['mail', 'Email code'],
+  ] as const) {
+    const o = document.createElement('option')
+    o.value = v
+    o.textContent = label
+    method.appendChild(o)
+  }
+  r1.append(name, method)
+  const r2 = document.createElement('div')
+  r2.className = 'r2'
+  const id = document.createElement('input')
+  id.className = 'who-id'
+  id.placeholder = 'email'
+  const showLabel = document.createElement('label')
+  const show = document.createElement('input')
+  show.type = 'checkbox'
+  show.className = 'who-show'
+  showLabel.append(show, document.createTextNode(' show'))
+  r2.append(id, showLabel)
+  if (!isHost) {
+    const rm = document.createElement('button')
+    rm.className = 'who-rm'
+    rm.type = 'button'
+    rm.textContent = '✕'
+    rm.title = 'Remove'
+    rm.onclick = () => row.remove()
+    r2.append(rm)
+  }
+  // The match parameter depends on the method: an exact email, or a whole domain.
+  method.onchange = () => {
+    id.placeholder = method.value === 'oidc' ? 'domain, e.g. acme.com' : 'email'
+  }
+  row.append(r1, r2)
+  return row
+}
+
+async function createFromWho(access: 'open' | 'verified'): Promise<void> {
+  const desc = el<HTMLInputElement>('whoDesc').value.trim().slice(0, 60)
+  const room = `kbz-${rand(10)}`
+  if (access === 'open') {
+    el('whopanel').hidden = true
+    await start(room, { desc })
+    return
+  }
+  const clientId = el<HTMLInputElement>('whoClient').value.trim()
+  if (!clientId) {
+    setStatus('Add your Google sign-in app (client id) to create a verified room.')
+    return
+  }
+  const invitees: InviteeInput[] = []
+  for (const r of Array.from(el('whoRows').children)) {
+    const method = (r.querySelector('.who-method') as HTMLSelectElement).value as InviteeInput['method']
+    const nm = (r.querySelector('.who-name') as HTMLInputElement).value.trim()
+    const idv = (r.querySelector('.who-id') as HTMLInputElement).value.trim()
+    const show = (r.querySelector('.who-show') as HTMLInputElement).checked
+    if (!idv) continue
+    invitees.push({
+      method,
+      ...(method === 'oidc' ? { domain: idv } : { email: idv }),
+      ...(nm ? { name: nm } : {}),
+      ...(show ? { show: true } : {}),
+    })
+  }
+  if (!invitees.length) {
+    setStatus('Add at least one person — an email (Sign in / Email code) or a domain (Any @domain).')
+    return
+  }
+  const base = `${WEB_BASE}/#${room}`
+  const exp = Math.floor(Date.now() / 1000) + 7 * 86400 // a week
+  const { roomLink } = await buildVerifiedRoster(base, room, invitees, clientId, exp)
+  const parsed = parseRoomLink(roomLink)
+  el('whopanel').hidden = true
+  await start(parsed.room || room, { gate: parsed.gate, desc })
+  setStatus('Verified room created — share the invite link. Sign in to be let in (you’re the host).')
+}
+
+function wireWhoPanel(): void {
+  const panel = el('whopanel')
+  const access = el('whoAccess')
+  let accessMode: 'open' | 'verified' = 'open'
+  const open = () => {
+    const rows = el('whoRows')
+    if (!rows.children.length) rows.appendChild(makeWhoRow(true)) // seed the host row
+    const client = el<HTMLInputElement>('whoClient')
+    if (!client.value) client.value = currentGate.clientId ?? ''
+    // Reflect the saved premium key (held in chrome.storage.sync, same as the ⚡ panel).
+    void sync.get(LICENSE_KEY).then((k) => {
+      el<HTMLInputElement>('whoPremKey').value = k ?? ''
+      el('whoPremOk').hidden = !k
+    })
+    panel.hidden = false
+  }
+  el('whoBtn').onclick = () => {
+    if (panel.hidden) open()
+    else panel.hidden = true
+  }
+  el('whoPremSave').onclick = async () => {
+    const v = el<HTMLInputElement>('whoPremKey').value.trim()
+    if (v) await sync.set(LICENSE_KEY, v)
+    else await sync.remove(LICENSE_KEY)
+    el('whoPremOk').hidden = !v
+    reflectLicense(v || null) // keep the header ⚡ indicator in sync
+    // No reload: the key is read fresh when this new room mounts (start → licenseKey) and when
+    // Copy mints the opener-pays grant. The header ⚡ panel handles re-keying a call in progress.
+  }
+  el('whoCancel').onclick = () => (panel.hidden = true)
+  el('whoPremToggle').onclick = () => {
+    const body = el('whoPremBody')
+    const show = body.hidden
+    body.hidden = !show
+    el('whoPremToggle').setAttribute('aria-expanded', String(show))
+    const caret = el('whoPremToggle').querySelector('.whoprem-caret')
+    if (caret) caret.textContent = show ? '▾' : '▸'
+  }
+  el('whoAdd').onclick = () => el('whoRows').appendChild(makeWhoRow(false))
+  for (const b of Array.from(access.querySelectorAll('button'))) {
+    ;(b as HTMLButtonElement).onclick = () => {
+      accessMode = ((b as HTMLElement).dataset.access as 'open' | 'verified') ?? 'open'
+      for (const x of Array.from(access.querySelectorAll('button'))) x.classList.toggle('sel', x === b)
+      el('whoVerified').hidden = accessMode !== 'verified'
+    }
+  }
+  el('whoCreate').onclick = () => void createFromWho(accessMode)
+}
+
 // --- Big-window hand-off -----------------------------------------------------
 const setHandedOff = (on: boolean): void => {
   el('handoff').hidden = !on
@@ -448,7 +692,9 @@ function openBigWindow(): void {
     call = null
   }
   setHandedOff(true)
-  const url = `sidepanel.html?big=1&room=${encodeURIComponent(currentRoom)}`
+  // Carry the FULL link (gate + description), not just the bare id — else a verified room would
+  // re-mount ungated in the big window. init() parses `?link=` back into the gate.
+  const url = `sidepanel.html?big=1&link=${encodeURIComponent(linkFor(currentRoom, currentGate, currentDesc))}`
   chrome.windows.create({ url, type: 'popup', width: 1024, height: 720, focused: true }, (w) => {
     bigWinId = w?.id ?? null
     if (bigWinId != null) void store.set('kibitz.bigWin', String(bigWinId))
@@ -459,22 +705,40 @@ const bringBack = (): void => {
   if (bigWinId != null) chrome.windows.remove(bigWinId) // → onRemoved re-mounts the panel
 }
 
-async function start(room: string): Promise<void> {
+interface StartOpts {
+  gate?: GateDescriptor
+  credential?: string
+  desc?: string
+  grant?: string
+}
+
+async function start(room: string, opts: StartOpts = {}): Promise<void> {
   currentRoom = room
+  currentGate = opts.gate ?? { mode: 'open' }
+  currentCred = opts.credential
+  currentDesc = opts.desc ?? ''
+  currentGrant = opts.grant
   if (call) {
     call.unmount()
     call = null
   }
   await store.set('kibitz.room', room)
+  // Persist the FULL link (gate + description), so a panel reopen or a big-window hand-off
+  // restores a verified room intact — not just the bare id, which would mount it ungated.
+  await store.set('kibitz.link', linkFor(room, currentGate, currentDesc))
   let uid = await store.get('kibitz.uid')
   if (!uid) {
     uid = `u${rand(10)}`
     await store.set('kibitz.uid', uid)
   }
-  el('room').textContent = room
+  el('room').textContent = currentDesc || room
   el('room').title = `Room ${room} — share the invite link or QR`
   renderInvite()
   setStatus(`Connecting via ${SIGNAL_HOST}…`)
+
+  // A `google`-mode link implies verified identity (the client id rides the link). Decode it the
+  // same way the web app does, so opening a link someone else produced behaves identically here.
+  const verifyIdentity = identityFromGate(currentGate)
 
   const license = await sync.get(LICENSE_KEY)
   reflectLicense(license)
@@ -486,6 +750,12 @@ async function start(room: string): Promise<void> {
     ...(license ? { licenseKey: license } : {}),
     identity: uid,
     name: myName,
+    ...(verifyIdentity ? { verifyIdentity } : {}),
+    ...(currentGate.mode !== 'open' ? { joinGate: currentGate } : {}),
+    ...(currentCred ? { joinCredential: currentCred } : {}),
+    // Email-method peers' tokens are issued by kibitz.chat — verify them there, not against
+    // this chrome-extension:// origin (Google tokens are origin-independent and need no base).
+    apiBase: WEB_BASE,
   })
   // Join muted (camera off). The engine still negotiates silent/black placeholder
   // tracks, so mic:false peers connect fine (proven on real Chrome).
@@ -504,6 +774,7 @@ async function start(room: string): Promise<void> {
   renderRoom(call.getParticipants())
   updateControls()
   renderLobby()
+  renderVerify()
   // Lobby: the host's queue changed, or our own knock status did.
   call.on('knocks', () => renderLobby())
   call.on('lobby', () => renderLobby())
@@ -511,6 +782,7 @@ async function start(room: string): Promise<void> {
     renderRoom(p)
     updateControls()
     renderLobby()
+    renderVerify()
     // Someone newer took the presenter role → drop ours (one stage, always).
     if (call?.getState().sharing && p.some((q) => !q.isSelf && presentAtOf(q) > myPresentAt)) {
       call.stopShare()
@@ -524,6 +796,7 @@ async function start(room: string): Promise<void> {
   call.on('state', (s) => {
     updateControls()
     renderLobby()
+    renderVerify()
     if (!s.sharing && lastSharing) {
       myPresentAt = 0
       call?.setMeta({ presenting: false })
@@ -583,8 +856,18 @@ async function shareTab(): Promise<void> {
 }
 
 async function init(): Promise<void> {
-  const fromUrl = new URL(location.href).searchParams.get('room')
-  const room = fromUrl || (await store.get('kibitz.room')) || `kbz-${rand(10)}`
+  // Resolve what to open into a room + its gate: `?link=` (the big-window hand-off carries the
+  // FULL gated link), a legacy `?room=`, the persisted full link (restores a verified room across
+  // a reopen), the persisted bare id, or a fresh generated id. parseRoomLink unifies every shape.
+  const search = new URL(location.href).searchParams
+  const source =
+    search.get('link') ||
+    (search.get('room') ? `#${search.get('room')}` : '') ||
+    (await store.get('kibitz.link')) ||
+    ((await store.get('kibitz.room')) ? `#${await store.get('kibitz.room')}` : '') ||
+    `#kbz-${rand(10)}`
+  const entry = parseRoomLink(source)
+  const room = entry.room || `kbz-${rand(10)}`
 
   // Display name — stable per browser; used for tiles + chat. Generate a friendly
   // default so peers aren't all "You".
@@ -649,10 +932,25 @@ async function init(): Promise<void> {
     location.reload() // re-mount with the new key + re-fetch TURN (a fresh page clears the ICE cache)
   }
   el('copy').onclick = async () => {
-    const link = inviteUrl(currentRoom)
+    let link = inviteUrl(currentRoom)
+    // Opener-pays: if a premium key is saved, mint a signed room-grant (against kibitz.chat — this
+    // origin has no /api) and bake it into the invite so guests get a relay billed to us.
+    const key = await sync.get(LICENSE_KEY)
+    let sponsored = false
+    if (key) {
+      const g = await requestRoomGrant(normalizeRoom(currentRoom), key, WEB_BASE)
+      if (g) {
+        link = linkWithGrant(link, g.grant)
+        sponsored = true
+      }
+    }
     try {
       await navigator.clipboard.writeText(link)
-      setStatus('Invite link copied — anyone can open it to watch + talk, no extension needed.')
+      setStatus(
+        sponsored
+          ? 'Invite link copied — guests you invite get a sponsored relay.'
+          : 'Invite link copied — anyone can open it to watch + talk, no extension needed.',
+      )
     } catch {
       setStatus(link) // clipboard blocked — show the link to copy by hand
     }
@@ -661,13 +959,33 @@ async function init(): Promise<void> {
     el('qrpanel').hidden = !el('qrpanel').hidden
   }
   const join = () => {
-    const v = el<HTMLInputElement>('joinInput').value.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-')
-    if (v) void start(v)
+    // Accept a full link (verified rooms carry their gate in the URL) OR a bare room code.
+    const parsed = parseRoomLink(el<HTMLInputElement>('joinInput').value)
+    if (parsed.room)
+      void start(parsed.room, {
+        gate: parsed.gate,
+        credential: parsed.credential,
+        desc: parsed.description,
+        grant: parsed.grant,
+      })
   }
   el('joinBtn').onclick = join
   el<HTMLInputElement>('joinInput').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') join()
   })
+  el('vbtn').onclick = () => void openVerifyPopup()
+  // The verify popup (kibitz.chat origin) posts the cert-bound token back here; adopt it.
+  window.addEventListener('message', (e) => {
+    if (e.origin !== WEB_BASE) return
+    const d = e.data as { kibitzVerify?: boolean; jwt?: string } | null
+    // A token is ~1KB; cap the length so a hostile message can't feed the verifier megabytes.
+    if (!d || !d.kibitzVerify || typeof d.jwt !== 'string' || d.jwt.length > 8192 || !call) return
+    void call.provideIdentityToken(d.jwt).then((ok) => {
+      setStatus(ok ? '' : 'That verification didn’t match this connection — tap Verify to try again.')
+      renderVerify()
+    })
+  })
+  wireWhoPanel()
 
   if (!IS_BIG) {
     el('bringBack').onclick = bringBack
@@ -677,7 +995,7 @@ async function init(): Promise<void> {
       bigWinId = null
       void store.set('kibitz.bigWin', '')
       setHandedOff(false)
-      void start(currentRoom)
+      void start(currentRoom, { gate: currentGate, credential: currentCred, desc: currentDesc })
     })
     // Panel reopened while a big window is still up? Adopt the handed-off state
     // instead of mounting a second engine.
@@ -689,6 +1007,9 @@ async function init(): Promise<void> {
       if (stillOpen) {
         bigWinId = Number(saved)
         currentRoom = room
+        currentGate = entry.gate
+        currentCred = entry.credential
+        currentDesc = entry.description ?? ''
         setHandedOff(true)
         return
       }
@@ -696,7 +1017,7 @@ async function init(): Promise<void> {
     }
   }
 
-  await start(room)
+  await start(room, { gate: entry.gate, credential: entry.credential, desc: entry.description, grant: entry.grant })
 }
 
 void init()
