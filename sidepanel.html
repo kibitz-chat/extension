@@ -157,6 +157,7 @@
         overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
       }
       .tile .badge { position: absolute; right: 5px; top: 5px; background: rgba(0,0,0,.55); padding: 2px 5px; border-radius: 6px; display: inline-flex; }
+      .tile .agent-tag { position: absolute; left: 6px; top: 6px; font-size: 0.66em; font-weight: 700; background: rgba(88,197,255,.2); color: #9cd7ff; padding: 1px 5px; border-radius: 6px; }
       .empty { grid-column: 1 / -1; color: #7fa593; text-align: center; padding: 20px 8px; }
 
       .status { padding: 0 12px 6px; font-size: 0.8em; color: #7fa593; min-height: 1.2em; flex: 0 0 auto; }
@@ -337,7 +338,7 @@
     </div>
 
     <div class="license" id="license" hidden>
-      <p class="lic-info">Premium relay, unlocked with a key — saved to your Chrome and synced across your devices. <a href="#" id="getKey">Get one →</a></p>
+      <p class="lic-info">Sponsored relay, unlocked with a key — saved to your Chrome and synced across your devices. Calls already work free without one. <em>Beta: keys are by request.</em> <a href="#" id="getKey">Learn more →</a></p>
       <div class="lic-row">
         <input id="keyInput" placeholder="paste license key" autocomplete="off" spellcheck="false" />
         <button id="keySave">Save</button>
@@ -388,7 +389,7 @@
           <span>⚡ Premium <em>(optional)</em></span><span class="whoprem-caret">▸</span>
         </button>
         <div class="whoprem-body" id="whoPremBody" hidden>
-          <p class="whoprem-fine">Sponsor your room’s infrastructure for everyone you invite — a reliable relay, plus verification emails when you use email-code. One key covers both; it never leaves this browser.</p>
+          <p class="whoprem-fine">Sponsor your room’s infrastructure for everyone you invite — a reliable relay, plus verification emails when you use email-code. One key covers both; it never leaves this browser. Calls already work free without a key. <em>Beta: keys are by request — no self-serve checkout yet.</em></p>
           <div class="whoprem-row">
             <input id="whoPremKey" placeholder="paste premium key" autocomplete="off" spellcheck="false" />
             <button type="button" id="whoPremSave">Save</button>

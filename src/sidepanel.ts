@@ -365,6 +365,14 @@ function renderTiles(parts: Participant[]): void {
     label.className = 'label'
     label.textContent = `${p.name || 'Guest'}${p.isSelf ? ' (you)' : ''}`
     tile.appendChild(label)
+    if (p.meta?.role === 'agent') {
+      // Shown to EVERYONE: never ambiguous that a participant is an AI agent.
+      const ai = document.createElement('span')
+      ai.className = 'agent-tag'
+      ai.textContent = '🤖 AI'
+      ai.title = 'An AI agent — read-only unless the host grants it more'
+      tile.appendChild(ai)
+    }
     if (isPresenting(p)) {
       const b = document.createElement('span')
       b.className = 'badge'
