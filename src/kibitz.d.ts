@@ -51,6 +51,19 @@ export interface Knock {
   avatar: string
 }
 
+/** An app self-describing the shape of its messages / shared view, so an agent can discover how
+ *  to read them. Published over the data mesh; attributed to its publisher by the roster. */
+export interface SchemaInfo {
+  /** Publisher's participant id (matches the roster). */
+  from: string
+  /** A stable identifier for the schema (e.g. 'whist.view'). */
+  name: string
+  /** The schema's own version, app-defined (e.g. '1.0.0'). */
+  version: string
+  /** The schema document — a JSON Schema, an example payload, or any structured-clone-able shape. */
+  schema: unknown
+}
+
 /** Our own knock state as a joiner: held, refused, turned away (locked), or nothing. */
 export type LobbyJoinerStatus = 'waiting' | 'denied' | 'locked' | null
 
@@ -122,6 +135,9 @@ export interface MountOptions {
    *  panel runs on chrome-extension://, so it must point email-method verification at
    *  https://kibitz.chat rather than its own origin. */
   apiBase?: string
+  /** Privacy: force media/data through TURN (`iceTransportPolicy:'relay'`) so peers never see your
+   *  IP — only the relay does. Fail-closed (no TURN ⇒ no connection, never a direct leak). */
+  relayOnly?: boolean
 }
 
 export interface MountedWidget {
@@ -131,6 +147,13 @@ export interface MountedWidget {
   sendTo(participantId: string, data: unknown): void
   /** Subscribe to messages (with the sender's id). Additive; returns an unsubscribe. */
   onMessage(cb: (data: unknown, from: string) => void): () => void
+  /** Publish a schema for your messages / shared view so an agent can self-discover them.
+   *  Re-broadcast to late joiners; re-publishing a `name` replaces it. No-op until in the call. */
+  registerSchema(name: string, version: string, schema: unknown): void
+  /** Every schema currently known — yours and every peer's, attributed by publisher id. */
+  getSchemas(): readonly SchemaInfo[]
+  /** Subscribe to schemas as peers publish them. Returns an unsubscribe function. */
+  onSchema(cb: (s: SchemaInfo) => void): () => void
   getState(): CallState
   getParticipants(): Participant[]
   join(opts?: { mic?: boolean; cam?: boolean }): Promise<boolean>

@@ -7,7 +7,7 @@
 // crucially, buildable on its own (no monorepo). Types: ./kibitz.d.ts.
 import { qrSvg } from '../core/qr'
 import { normalizeRoom } from '../core/transport'
-import { encodeGateParams, type GateDescriptor } from '../core/joinGateLink'
+import { encodeGateParams, withGateFragment, type GateDescriptor } from '../core/joinGateLink'
 import { buildVerifiedRoster, type InviteeInput } from '../core/joinGateRuntime'
 import { linkWithGrant, requestRoomGrant } from '../core/grant'
 import { identityFromGate, parseRoomLink } from './roomLink'
@@ -67,10 +67,9 @@ function linkFor(room: string, gate: GateDescriptor, desc?: string): string {
   if (!gate || gate.mode === 'open') return `${WEB_BASE}/#${room}`
   const params = encodeGateParams(gate)
   if (desc) params.set('d', desc)
-  const u = new URL(`${WEB_BASE}/`)
-  u.search = params.toString()
-  u.hash = room
-  return u.toString()
+  // Carry the gate in the FRAGMENT (`…/#room?g=…`), host-private — the same link the web app
+  // reads (gateParamsFrom), so the roster never reaches the host. Open rooms stay bare `#room`.
+  return withGateFragment(`${WEB_BASE}/#${room}`, params)
 }
 const inviteUrl = (room: string): string => linkFor(room, currentGate, currentDesc)
 const el = <T extends HTMLElement = HTMLElement>(id: string): T => document.getElementById(id) as T
